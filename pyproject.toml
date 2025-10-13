@@ -1,0 +1,11 @@
+[project]
+name = "practicellms"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dotenv>=0.9.9",
+    "langchain[openai]>=0.3.27",
+    "langgraph>=0.6.10",
+]
