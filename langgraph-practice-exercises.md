@@ -58,7 +58,7 @@ This exercise uses a simple string-based **prompt template**, not a chat templat
 ## Exercise 3: Your First Tool-Using Agent (Calculator)
 
 **Task**
-- Build a simple **LangChain Agent** that decides when it needs arithmetic.
+- Build a simple **LangGraph agent (repeating agent loop)** that decides when it needs arithmetic.
 - Call a **calculator tool** to do the math.
 - Return the final answer to the user.
 
@@ -67,15 +67,15 @@ This exercise uses a simple string-based **prompt template**, not a chat templat
 - Show a transparent tool log like “Calling calculator with `3 * 7`.”
 
 **Discussion**
-This exercise specifically uses **LangChain Agents**, not LangGraph. The goal is to understand LangChain’s built-in agent system — where the model dynamically selects and invokes tools based on the prompt. You’ll implement reasoning → tool selection → action → observation → final answer flow.  
-Later exercises will rebuild this logic in LangGraph to show how explicit graphs replace implicit agent reasoning.
+This exercise uses **LangGraph’s repeating agent loop**, not LangChain Agents. The goal is to understand the implicit agent flow where the model dynamically selects and invokes tools inside the loop. You’ll implement reasoning → tool selection → action → observation → final answer flow.
+In the next exercise, you will rebuild this logic with an explicit **StateGraph** to replace the implicit loop with explicit edges.
 
 ---
 
 ## Exercise 4: Rebuild the Agent in LangGraph
 
 **Task**
-- Recreate Exercise 3 using **LangGraph**.
+- Recreate Exercise 3 using an explicit **StateGraph** (no built‑in repeating loop).
 - Define a minimal **StateGraph** with nodes such as `plan`, `act`, and `answer`.
 - Add an edge that calls the calculator and stores the result in state.
 
@@ -84,7 +84,7 @@ Later exercises will rebuild this logic in LangGraph to show how explicit graphs
 - Print the final **state** as JSON to show what happened.
 
 **Discussion**
-LangGraph gives explicit control over agent state and edges between steps. Start with a tiny graph to learn state, nodes, and edge conditions before expanding.
+LangGraph gives explicit control over agent state and edges between steps. Do not use the repeating agent loop here; route control flow explicitly via edges and conditions. Start with a tiny graph to learn state, nodes, and edge conditions before expanding.
 
 ---
 
