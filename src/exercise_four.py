@@ -2,31 +2,48 @@
 https://python.langchain.com/docs/how_to/custom_tools/
 """
 
+from functools import partial
 from pprint import pprint
 from typing import Literal, Optional
 from typing import Annotated, Sequence
 
-from langchain_core.messages import HumanMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel
-from functools import partial
 
 from shared.lc_llm import get_lc_llm
 
 
-# Tool Stuff
-class MathInput(BaseModel):
-    operation: Literal["add", "subtract", "multiply", "divide"]
-    x: float
-    y: float
+class QuestionType(BaseModel):
+    """
+    Pydantic Model defining the type of question the user is asking.
+    """
+
+    question_type: Literal["math", "other"]
+
+
+class GraphState(BaseModel):
+    """
+    Pydantic Model defining the state for the graph.
+    """
+
+    # Messages are added to the state by the add_messages function.
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+
+    # Determines the type of question the user is asking.
+    question_type: Optional[QuestionType] = None
+
+    # Result is the final answer to the user's prompt.
+    result: Optional[float] = None
 
 
 @tool
 def basic_calculator_tool(
     operation: Literal["add", "subtract", "multiply", "divide"], x: float, y: float
-) -> int:
+) -> float:
     """
     A tool for basic arithmetic operations between two numbers.
     """
@@ -40,69 +57,80 @@ def basic_calculator_tool(
         return x / y
 
 
-class IsMathQuestionOutput(BaseModel):
-    is_math_question: bool
-
-
-# Workflow State
-class GraphState(BaseModel):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
-    is_math_question: Optional[IsMathQuestionOutput] = None
-
-    result: Optional[float] = None
-
-
 # Nodes
-def is_math_question(state: GraphState, LLM) -> IsMathQuestionOutput:
-    messages = state.messages
-    llm_structured_output = LLM.with_structured_output(IsMathQuestionOutput)
-    prompt = f"Is the following user prompt a math question? Answer with True or False ONLY. User Prompt: {state.messages[-1].content}"
-    return llm_structured_output.invoke(prompt)
-
-
-def math_exec(state: GraphState, LLM) -> GraphState:
-    prompt = f"""You are a helpful assistant in place to help with arithmetic. 
-    Your task is to extract the necessary information from the prompt and call the calculator tool.
+def determine_question_type(state: GraphState, LLM) -> dict:
+    prompt = f"""You are a question router.
+    You are given a user prompt and you need to determine if the prompt requires a math calculation.
+    If it does, return "math". If it doesn't, return "other". Answer with "math" or "other" ONLY.
     Your User Prompt: {state.messages[-1].content}"""
-    return LLM.invoke(prompt)
+
+    llm_structured_output = LLM.with_structured_output(QuestionType)
+    result = llm_structured_output.invoke(prompt)
+    return {"question_type": result}
 
 
-# Conditional Edges
-def math_question_edge(state: GraphState) -> bool:
-    if state.is_math_question.is_math_question == True:
-        return "math_exec", {"result": state.is_math_question.result}
-    else:
-        return END
+def question_type_edge(state: GraphState):
+    return state.question_type.question_type
+
+
+def do_math(state: GraphState, LLM) -> dict:
+    system_message = SystemMessage(
+        content="""You are a helpful assistant in place to help with arithmetic. You call the calculator tool to perform the math as necessary"""
+    )
+
+    response = LLM.invoke([system_message, *state.messages])
+    return {"messages": [response]}
+
+
+def needs_tool_call(state: GraphState) -> str:
+    last = state.messages[-1]
+    return (
+        "tool_node"
+        if isinstance(last, AIMessage) and getattr(last, "tool_calls", None)
+        else END
+    )
 
 
 def main():
-
-    SYSTEM_PROMPT = """You are a helpful assistant in place to help with arithmetic."""
     USER_PROMPT = (
         "What tools do you have access to? I want to multiply 632 and 721."  # 455672
     )
+    # USER_PROMPT = "What is the capital of France?"
 
     TOOLS = [basic_calculator_tool]
     LLM = get_lc_llm()
-    LLM_WITH_TOOLS = LLM.bind_tools(TOOLS)
+    LLM_WITH_TOOLS = LLM.bind_tools(TOOLS)  # Runnable
+    tool_node = ToolNode(TOOLS)  # Special node required to run tools.
 
-    lg_graph_builder = StateGraph(GraphState)
+    # GraphState is a pydantic model that defines the state of the graph
+    g = StateGraph(GraphState)
 
-    lg_graph_builder.add_node("is_math_question", partial(is_math_question, LLM=LLM))
-    lg_graph_builder.add_node("math_exec", partial(math_exec, LLM=LLM_WITH_TOOLS))
+    # Add nodes to the graph
+    g.add_node("determine_question_type", partial(determine_question_type, LLM=LLM))
+    g.add_node("do_math", partial(do_math, LLM=LLM_WITH_TOOLS))
+    g.add_node("tool_node", tool_node)
 
-    lg_graph_builder.add_edge(START, "is_math_question")
-    lg_graph_builder.add_conditional_edges(
-        "is_math_question",
-        math_question_edge,
+    # Add edges to the graphs
+    g.add_edge(START, "determine_question_type")
+    g.add_conditional_edges(
+        "determine_question_type",
+        question_type_edge,
         {
-            True: "math_exec",
-            False: END,
+            "math": "do_math",
+            "other": END,
         },
     )
-    lg_graph_builder.add_edge("math_exec", END)
+    g.add_conditional_edges(
+        "do_math",
+        needs_tool_call,
+        {
+            "tool_node": "tool_node",
+            END: END,
+        },
+    )
+    g.add_edge("tool_node", "do_math")
 
-    lg_graph = lg_graph_builder.compile()
+    lg_graph = g.compile()
 
     png_data = lg_graph.get_graph().draw_mermaid_png()
     with open("graph.png", "wb") as f:
