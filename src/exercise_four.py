@@ -1,7 +1,3 @@
-"""
-https://python.langchain.com/docs/how_to/custom_tools/
-"""
-
 from functools import partial
 from pprint import pprint
 from typing import Literal, Optional
@@ -11,7 +7,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import tool
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel
 
 from shared.lc_llm import get_lc_llm
@@ -25,6 +20,16 @@ class QuestionType(BaseModel):
     question_type: Literal["math", "other"]
 
 
+class CalculatorToolRequest(BaseModel):
+    """
+    Pydantic Model for the calculator tool.
+    """
+
+    operation: Literal["add", "subtract", "multiply", "divide"]
+    x: float
+    y: float
+
+
 class GraphState(BaseModel):
     """
     Pydantic Model defining the state for the graph.
@@ -33,6 +38,9 @@ class GraphState(BaseModel):
     # Messages are added to the state by the add_messages function.
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
+    # The calculator tool request is the request to the calculator tool.
+    calculator_tool_request: Optional[CalculatorToolRequest] = None
+
     # Determines the type of question the user is asking.
     question_type: Optional[QuestionType] = None
 
@@ -40,8 +48,7 @@ class GraphState(BaseModel):
     result: Optional[float] = None
 
 
-@tool
-def basic_calculator_tool(
+def calculator_tool(
     operation: Literal["add", "subtract", "multiply", "divide"], x: float, y: float
 ) -> float:
     """
@@ -73,22 +80,43 @@ def question_type_edge(state: GraphState):
     return state.question_type.question_type
 
 
-def do_math(state: GraphState, LLM) -> dict:
+def call_calculator_tool(state: GraphState, LLM) -> dict:
     system_message = SystemMessage(
         content="""You are a helpful assistant in place to help with arithmetic. You call the calculator tool to perform the math as necessary"""
     )
 
-    response = LLM.invoke([system_message, *state.messages])
-    return {"messages": [response]}
-
-
-def needs_tool_call(state: GraphState) -> str:
-    last = state.messages[-1]
-    return (
-        "tool_node"
-        if isinstance(last, AIMessage) and getattr(last, "tool_calls", None)
-        else END
+    llm_structured_output = LLM.with_structured_output(CalculatorToolRequest)
+    calc_request_result = llm_structured_output.invoke(
+        [system_message, *state.messages]
     )
+
+    # Call the calculator tool
+    calculator_tool_result = calculator_tool(
+        operation=calc_request_result.operation,
+        x=calc_request_result.x,
+        y=calc_request_result.y,
+    )
+
+    messages = [
+        *state.messages,
+        AIMessage(content=f"Calculator tool result: {calculator_tool_result}"),
+    ]
+
+    return {
+        "messages": messages,
+        "calculator_tool_request": calc_request_result,
+        "result": calculator_tool_result,
+    }
+
+
+def finalize_result(state: GraphState, LLM) -> dict:
+    system_message = SystemMessage(
+        content=f"""You are a helpful assistant in place to help with arithmetic. Trust the result of the calculator tool if one has been provided. If there is any other information that needs to be provided, provide it, but trust the result of the calculator tool if one has been provided."""
+    )
+
+    messages = [system_message, *state.messages]
+    final_message = LLM.invoke(messages)
+    return {"messages": [final_message]}
 
 
 def main():
@@ -97,38 +125,25 @@ def main():
     )
     # USER_PROMPT = "What is the capital of France?"
 
-    TOOLS = [basic_calculator_tool]
     LLM = get_lc_llm()
-    LLM_WITH_TOOLS = LLM.bind_tools(TOOLS)  # Runnable
-    tool_node = ToolNode(TOOLS)  # Special node required to run tools.
 
     # GraphState is a pydantic model that defines the state of the graph
     g = StateGraph(GraphState)
 
     # Add nodes to the graph
     g.add_node("determine_question_type", partial(determine_question_type, LLM=LLM))
-    g.add_node("do_math", partial(do_math, LLM=LLM_WITH_TOOLS))
-    g.add_node("tool_node", tool_node)
+    g.add_node("call_calculator_tool", partial(call_calculator_tool, LLM=LLM))
+    g.add_node("finalize_result", partial(finalize_result, LLM=LLM))
 
     # Add edges to the graphs
     g.add_edge(START, "determine_question_type")
     g.add_conditional_edges(
         "determine_question_type",
         question_type_edge,
-        {
-            "math": "do_math",
-            "other": END,
-        },
+        {"math": "call_calculator_tool", "other": END},
     )
-    g.add_conditional_edges(
-        "do_math",
-        needs_tool_call,
-        {
-            "tool_node": "tool_node",
-            END: END,
-        },
-    )
-    g.add_edge("tool_node", "do_math")
+    g.add_edge("call_calculator_tool", "finalize_result")
+    g.add_edge("finalize_result", END)
 
     lg_graph = g.compile()
 
