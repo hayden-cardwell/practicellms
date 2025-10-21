@@ -1,3 +1,4 @@
+from datetime import datetime
 from functools import partial
 from pprint import pprint
 from typing import Literal, Optional
@@ -53,7 +54,7 @@ class GraphState(BaseModel):
     search_query: Optional[SearchToolRequest] = None
 
     # The results of the search tool.
-    search_results: Optional[list[str]] = None
+    search_results: Optional[list] = None
 
     # The calculator tool request is the request to the calculator tool.
     calculator_tool_request: Optional[CalculatorToolRequest] = None
@@ -78,7 +79,7 @@ def calculator_tool(
         return x / y
 
 
-def search_tool(queries: str) -> dict:
+def search_tool(queries: str) -> list:
     search = DuckDuckGoSearchResults(max_results=5)
     results = [search.invoke(q) for q in queries]
     return results
@@ -137,10 +138,11 @@ def call_calculator_tool(state: GraphState, LLM) -> dict:
 def call_search_tool(state: GraphState, LLM) -> dict:
     system_message = SystemMessage(
         content=(
-            "You are a web search expert assistant. "
-            "Given a user's message, generate a clear and effective search engine query that will best help answer the user's question. "
-            "Do not simply repeat or rephrase the user's prompt. Carefully consider the user's intent and provide a concise, high-quality query likely to yield relevant and informative results."
-            "Provide five search queries."
+            f"""You are a web search expert assistant. 
+            Given a user's message, generate a clear and effective search engine query that will best help answer the user's question. 
+            Do not simply repeat or rephrase the user's prompt. Carefully consider the user's intent and provide a concise, high-quality query likely to yield relevant and informative results.
+            Provide five search queries.
+            The current date is {datetime.now().strftime('%Y-%m-%d')}"""
         )
     )
 
