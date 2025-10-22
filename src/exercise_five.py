@@ -1,13 +1,14 @@
 from datetime import datetime
 from functools import partial
 from pprint import pprint
-from typing import Literal, Optional
-from typing import Annotated, Sequence
+from typing import Annotated, Literal, Optional, Sequence
 
 from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 
 from shared.lc_llm import get_lc_llm
@@ -39,6 +40,14 @@ class SearchToolRequest(BaseModel):
     queries: list[str]
 
 
+class UserSatisfaction(BaseModel):
+    """
+    Pydantic Model for the user's satisfaction with the result.
+    """
+
+    user_satisfaction: Literal["satisfied", "unsatisfied"]
+
+
 class GraphState(BaseModel):
     """
     Pydantic Model defining the state for the graph.
@@ -62,6 +71,9 @@ class GraphState(BaseModel):
     # Result is the final answer to the user's prompt.
     result: Optional[float] = None
 
+    # The user's satisfaction with the result.
+    user_satisfaction: Optional[UserSatisfaction] = None
+
 
 def calculator_tool(
     operation: Literal["add", "subtract", "multiply", "divide"], x: float, y: float
@@ -80,7 +92,7 @@ def calculator_tool(
 
 
 def search_tool(queries: str) -> list:
-    search = DuckDuckGoSearchResults(max_results=5)
+    search = DuckDuckGoSearchResults(max_results=3)
     results = [search.invoke(q) for q in queries]
     return results
 
@@ -141,7 +153,7 @@ def call_search_tool(state: GraphState, LLM) -> dict:
             f"""You are a web search expert assistant. 
             Given a user's message, generate a clear and effective search engine query that will best help answer the user's question. 
             Do not simply repeat or rephrase the user's prompt. Carefully consider the user's intent and provide a concise, high-quality query likely to yield relevant and informative results.
-            Provide five search queries.
+            Provide up to 3 search queries.
             The current date is {datetime.now().strftime('%Y-%m-%d')}"""
         )
     )
@@ -179,8 +191,70 @@ def finalize_result(state: GraphState, LLM) -> dict:
     return {"messages": [final_message]}
 
 
+def check_user_satisfaction(state: GraphState, LLM) -> dict:
+    """
+    A node to check if the user is satisfied with the result.
+    Waits for user input to confirm satisfaction or dissatisfaction.
+    """
+
+    feedback = interrupt("Are you satisfied with the result?")
+
+    system_message = SystemMessage(
+        content=f"""You are a helpful assistant in place to check if the user is satisfied with the result.
+        """
+    )
+
+    llm_structured_output = LLM.with_structured_output(UserSatisfaction)
+    user_satisfaction_result = llm_structured_output.invoke(
+        [system_message, *state.messages, feedback]
+    )
+
+    messages = [*state.messages, HumanMessage(content=feedback)]
+
+    print(f"User satisfaction result: {user_satisfaction_result}")
+    return {"messages": messages, "user_satisfaction": user_satisfaction_result}
+
+
+def user_satisfaction_edge(state: GraphState):
+    return state.user_satisfaction.user_satisfaction
+
+
+def run_loop(lg_graph):
+    # THIS FUNCTION WAS AI GEN, NEED TO REWRITE IT
+    thread = {"configurable": {"thread_id": "1"}}
+
+    # Initial message from the user
+    user_input = "Stock market results yesterday?"
+    command = {"messages": HumanMessage(content=user_input)}
+
+    while True:
+        # Run the graph until an interrupt or the end
+        for event in lg_graph.stream(command, thread, stream_mode="updates"):
+            pprint(event)
+            print("-" * 80)
+
+            # If the graph ends naturally, we're done
+            if event.get("end"):
+                print("✅ Conversation complete.")
+                return
+
+            # If interrupted, ask the user for feedback
+            if "__interrupt__" in event:
+                interrupt_msg = event["__interrupt__"][0].value
+                print(interrupt_msg)
+                user_feedback = input("Your response: ")
+
+                # Resume the graph with user feedback
+                command = Command(resume=user_feedback)
+                break  # important: exit inner loop to resume
+        else:
+            # If we reach here, no interrupt occurred, so exit
+            break
+
+
 def main():
     LLM = get_lc_llm()
+    checkpoint_saver = InMemorySaver()
 
     # GraphState is a pydantic model that defines the state of the graph
     g = StateGraph(GraphState)
@@ -190,6 +264,7 @@ def main():
     g.add_node("call_calculator_tool", partial(call_calculator_tool, LLM=LLM))
     g.add_node("finalize_result", partial(finalize_result, LLM=LLM))
     g.add_node("call_search_tool", partial(call_search_tool, LLM=LLM))
+    g.add_node("check_user_satisfaction", partial(check_user_satisfaction, LLM=LLM))
 
     # Add edges to the graphs
     g.add_edge(START, "determine_question_type")
@@ -200,27 +275,20 @@ def main():
     )
     g.add_edge("call_calculator_tool", "finalize_result")
     g.add_edge("call_search_tool", "finalize_result")
-    g.add_edge("finalize_result", END)
+    g.add_edge("finalize_result", "check_user_satisfaction")
+    g.add_conditional_edges(
+        "check_user_satisfaction",
+        user_satisfaction_edge,
+        {"satisfied": END, "unsatisfied": "determine_question_type"},
+    )
 
-    lg_graph = g.compile()
+    lg_graph = g.compile(checkpointer=checkpoint_saver)
 
     png_data = lg_graph.get_graph().draw_mermaid_png()
     with open("graph.png", "wb") as f:
         f.write(png_data)
 
-    # TEST MULTIPLE PROMPTS
-    user_prompts = [
-        "What tools do you have access to? I want to multiply 632 and 721.",  # 455672
-        "What is the capital of France?",
-        "What happened yesterday in the stock market?",
-    ]
-
-    for prompt in user_prompts:
-        state = lg_graph.invoke({"messages": HumanMessage(content=prompt)})
-
-        pprint(state, indent=4)
-
-        print("-" * 100)
+    run_loop(lg_graph)
 
 
 if __name__ == "__main__":
