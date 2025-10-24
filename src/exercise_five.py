@@ -1,14 +1,13 @@
 from datetime import datetime
 from functools import partial
 from pprint import pprint
-from typing import Annotated, Literal, Optional, Sequence
+from typing import Literal, Optional
+from typing import Annotated, Sequence
 
 from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 
 from shared.lc_llm import get_lc_llm
@@ -40,22 +39,6 @@ class SearchToolRequest(BaseModel):
     queries: list[str]
 
 
-class SearchSummary(BaseModel):
-    """
-    Pydantic Model for the summary of the search results.
-    """
-
-    summary: str
-
-
-class UserSatisfaction(BaseModel):
-    """
-    Pydantic Model for the user's satisfaction with the result.
-    """
-
-    user_satisfaction: Literal["satisfied", "unsatisfied"]
-
-
 class GraphState(BaseModel):
     """
     Pydantic Model defining the state for the graph.
@@ -73,17 +56,11 @@ class GraphState(BaseModel):
     # The results of the search tool.
     search_results: Optional[list] = None
 
-    # The summary of the search results.
-    search_summary: Optional[str] = None
-
     # The calculator tool request is the request to the calculator tool.
     calculator_tool_request: Optional[CalculatorToolRequest] = None
 
     # Result is the final answer to the user's prompt.
     result: Optional[float] = None
-
-    # The user's satisfaction with the result.
-    user_satisfaction: Optional[UserSatisfaction] = None
 
 
 def calculator_tool(
@@ -159,23 +136,14 @@ def call_calculator_tool(state: GraphState, LLM) -> dict:
 
 
 def call_search_tool(state: GraphState, LLM) -> dict:
-
     system_message = SystemMessage(
-        content=f"""You are a web-search expert assistant. For each user message, produce up to three concise, high-quality search queries most likely to return relevant and authoritative results.
-
-    Important — use conversation context & user feedback:
-    • Use the current conversation (the user's latest message, prior user messages, and assistant replies in this session) to infer intent, constraints, and any previously attempted queries.
-    • If the user has given feedback about earlier queries (e.g., "narrow it", "more recent", "use academic sources", "exclude site:example.com", "try plain-language"), apply that feedback when generating new queries.
-    • If the user's last message asks for multiple interpretations or asks for comparison/alternatives, ensure the queries cover those interpretations.
-
-    Rules:
-    1. Output 1–3 queries only. Place each query on its own line and include no additional commentary or explanation.
-    2. Do NOT simply repeat or lightly rephrase the user's prompt. Translate the user's intent into focused search terms that capture key entities, constraints, and desired result types (e.g., tutorial, statistics, site:, filetype:).
-    3. Use the current date ({datetime.now().strftime('%Y-%m-%d')}) to prefer recency when appropriate — explicitly include years or date ranges in queries for time-sensitive requests.
-    4. Keep queries short and effective (roughly 3–12 words). Prefer keywords and search operators (quotes, site:, filetype:, OR, -, *) when they increase precision.
-    5. When the user's request is ambiguous, provide queries that cover the most likely interpretations (e.g., definition vs how-to vs comparison), but still limit to at most three queries.
-    6. Avoid stopwords, unnecessary punctuation, and full sentences unless required for exact-match (quoted) searches.
-    """
+        content=(
+            f"""You are a web search expert assistant. 
+            Given a user's message, generate a clear and effective search engine query that will best help answer the user's question. 
+            Do not simply repeat or rephrase the user's prompt. Carefully consider the user's intent and provide a concise, high-quality query likely to yield relevant and informative results.
+            Provide five search queries.
+            The current date is {datetime.now().strftime('%Y-%m-%d')}"""
+        )
     )
 
     llm_structured_output = LLM.with_structured_output(SearchToolRequest)
@@ -197,46 +165,12 @@ def call_search_tool(state: GraphState, LLM) -> dict:
     }
 
 
-def summarize_search_results(state: GraphState, LLM) -> dict:
-    system_message = SystemMessage(
-        content=(
-            "You are a helpful assistant responsible for summarizing the results of search tool calls.\n\n"
-            "Instructions:\n"
-            "1. Use the provided search tool results to create a clear summary.\n"
-            "2. Remove any duplicate or redundant information.\n"
-            "3. Prioritize signal over noise, but do not lose any important information.\n"
-            "4. You can be very verbose. The user will not be reading the summary, so you can be as detailed as you want.\n"
-            "5. If a previous search summary exists, update or refine it using the new results.\n"
-            "6. If no previous summary exists, generate a new summary based solely on the current results."
-        )
-    )
-
-    llm_structured_output = LLM.with_structured_output(SearchSummary)
-    search_summary_result = llm_structured_output.invoke(
-        [system_message, *state.messages]
-    )
-
-    # Remove the search tool results from the messages
-    messages = [m for m in state.messages if "Search tool results" not in m.content]
-
-    # Remove the previous search summary from the messages
-    messages = [m for m in messages if "Search summary" not in m.content]
-
-    # Add the search summary to the messages
-    messages = [
-        *messages,
-        AIMessage(content=f"Search summary: {search_summary_result.summary}"),
-    ]
-
-    return {"messages": messages, "search_summary": search_summary_result.summary}
-
-
 def finalize_result(state: GraphState, LLM) -> dict:
     system_message = SystemMessage(
-        content=f"""You are a helpful assistant in place to synthesize the results of previous tool calls and the search summary.
+        content=f"""You are a helpful assistant in place to synthesize the results of previous tool calls.
         Use the results of any previous tool calls to provide a final answer to the user's prompt.
         If the user's prompt involved a math calculation, use the result of the calculator tool.
-        If the user's prompt involved searching the web, use the results of the search tool and the search summary.
+        If the user's prompt involved searching the web, use the results of the search tool.
         """
     )
 
@@ -245,81 +179,8 @@ def finalize_result(state: GraphState, LLM) -> dict:
     return {"messages": [final_message]}
 
 
-def check_user_satisfaction(state: GraphState, LLM) -> dict:
-    """
-    A node to check if the user is satisfied with the result.
-    Waits for user input to confirm satisfaction or dissatisfaction.
-    """
-
-    feedback = interrupt("Are you satisfied with the result?")
-
-    system_message = SystemMessage(
-        content=f"""You are a helpful assistant in place to check if the user is satisfied with the result.
-        """
-    )
-
-    llm_structured_output = LLM.with_structured_output(UserSatisfaction)
-    user_satisfaction_result = llm_structured_output.invoke(
-        [system_message, *state.messages, feedback]
-    )
-
-    messages = [*state.messages, HumanMessage(content=feedback)]
-
-    print(f"User satisfaction result: {user_satisfaction_result}")
-    return {"messages": messages, "user_satisfaction": user_satisfaction_result}
-
-
-def user_satisfaction_edge(state: GraphState):
-    return state.user_satisfaction.user_satisfaction
-
-
-def run_loop(lg_graph: StateGraph) -> None:
-    # Define the thread ID for the conversation, could be random
-    thread = {"configurable": {"thread_id": "1"}}
-
-    # Initial message from the user
-    user_input = input("User: ")
-    if user_input.lower() in ["exit", "quit"]:
-        print("Exiting loop.")
-        return
-
-    # default query if no input is provided
-    if user_input == "":
-        print("Using default query of 'Stock market results yesterday?'")
-        user_input = "Stock market results yesterday?"
-
-    # Create the initial command with the user's input
-    command = {"messages": HumanMessage(content=user_input)}
-
-    while True:
-        # Events are updates to the state
-        for event in lg_graph.stream(command, thread, stream_mode="updates"):
-            pprint(event)
-            print("-" * 80)
-
-            # If the graph yields an end event, we're done
-            if event.get("end"):
-                print("✅ Conversation complete.")
-                return
-
-            # If the graph yields an interrupt event, we need to ask the user for feedback
-            if "__interrupt__" in event:
-                # Below prints the interrupt message that we define in the check_user_satisfaction node
-                interrupt_msg = event["__interrupt__"][0].value
-                print(interrupt_msg)
-                user_feedback = input("Your response: ")
-
-                # Using the feedback provided, we can resume the graph with the new command
-                command = Command(resume=user_feedback)
-                break
-
-        else:
-            raise ValueError("No interrupt event received")
-
-
 def main():
     LLM = get_lc_llm()
-    checkpoint_saver = InMemorySaver()
 
     # GraphState is a pydantic model that defines the state of the graph
     g = StateGraph(GraphState)
@@ -329,8 +190,6 @@ def main():
     g.add_node("call_calculator_tool", partial(call_calculator_tool, LLM=LLM))
     g.add_node("finalize_result", partial(finalize_result, LLM=LLM))
     g.add_node("call_search_tool", partial(call_search_tool, LLM=LLM))
-    g.add_node("summarize_search_results", partial(summarize_search_results, LLM=LLM))
-    g.add_node("check_user_satisfaction", partial(check_user_satisfaction, LLM=LLM))
 
     # Add edges to the graphs
     g.add_edge(START, "determine_question_type")
@@ -340,22 +199,28 @@ def main():
         {"math": "call_calculator_tool", "other": "call_search_tool"},
     )
     g.add_edge("call_calculator_tool", "finalize_result")
-    g.add_edge("call_search_tool", "summarize_search_results")
-    g.add_edge("summarize_search_results", "finalize_result")
-    g.add_edge("finalize_result", "check_user_satisfaction")
-    g.add_conditional_edges(
-        "check_user_satisfaction",
-        user_satisfaction_edge,
-        {"satisfied": END, "unsatisfied": "determine_question_type"},
-    )
+    g.add_edge("call_search_tool", "finalize_result")
+    g.add_edge("finalize_result", END)
 
-    lg_graph = g.compile(checkpointer=checkpoint_saver)
+    lg_graph = g.compile()
 
     png_data = lg_graph.get_graph().draw_mermaid_png()
     with open("graph.png", "wb") as f:
         f.write(png_data)
 
-    run_loop(lg_graph)
+    # TEST MULTIPLE PROMPTS
+    user_prompts = [
+        "What tools do you have access to? I want to multiply 632 and 721.",  # 455672
+        "What is the capital of France?",
+        "What happened yesterday in the stock market?",
+    ]
+
+    for prompt in user_prompts:
+        state = lg_graph.invoke({"messages": HumanMessage(content=prompt)})
+
+        pprint(state, indent=4)
+
+        print("-" * 100)
 
 
 if __name__ == "__main__":
