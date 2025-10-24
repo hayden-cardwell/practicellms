@@ -11,3 +11,6 @@ wheels/
 
 # Environment variables
 .env
+
+# Embeddings models
+src/models/

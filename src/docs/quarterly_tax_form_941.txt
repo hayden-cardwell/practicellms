@@ -1,0 +1,132 @@
+Form 941 for Quarter 3 (July, August, and September), 2025
+Department of the Treasury - Internal Revenue Service
+
+Employer's QUARTERLY Federal Tax Return
+
+═══════════════════════════════════════════════════════════════
+
+EMPLOYER IDENTIFICATION NUMBER (EIN): 87-2345678
+NAME: Superior Fence Solutions LLC
+TRADE NAME (if any): Superior Fence Solutions
+
+ADDRESS:
+123 Construction Lane
+Builderville, ST 12345-6789
+
+═══════════════════════════════════════════════════════════════
+
+PART 1: Answer these questions for this quarter.
+
+1. Number of employees who received wages, tips, or other
+   compensation for the pay period including: September 12, 2025    8
+
+2. Wages, tips, and other compensation                         $89,450.00
+
+3. Federal income tax withheld from wages, tips, and other
+   compensation                                                $12,785.50
+
+4. If no wages, tips, and other compensation are subject to
+   social security or Medicare tax                            ☐ Check and go to line 6.
+
+5a. Taxable social security wages                             $89,450.00 × .124 = $11,091.80
+5b. Taxable social security tips                                    .00 × .124 =        .00
+5c. Taxable Medicare wages & tips                             $89,450.00 × .029 = $2,594.05
+5d. Taxable wages & tips subject to Additional Medicare Tax          .00 × .009 =        .00
+
+5e. Total taxes before adjustments                                              $13,685.85
+
+6. Current quarter's adjustment for fractions of cents                               -.03
+
+7. Current quarter's adjustment for sick pay                                         .00
+
+8. Current quarter's adjustments for tips and group-term life insurance             .00
+
+9. Total taxes after adjustments                                               $13,685.82
+
+10. Qualified small business payroll tax credit for increasing
+    research activities                                                              .00
+
+11. Total taxes after adjustments and credits                                  $13,685.82
+
+12. Total deposits for this quarter, including overpayment
+    applied from a prior quarter                                               $26,471.32
+
+13. Balance due                                                                      .00
+
+14. Overpayment                                                                     .00
+
+═══════════════════════════════════════════════════════════════
+
+PART 2: Tell us about your deposit schedule and tax liability for this quarter.
+
+If you are unsure about whether you are a monthly schedule depositor or a
+semiweekly schedule depositor, see section 11 of Pub. 15.
+
+☐ Line 11 on this return is less than $2,500 or line 11 on the return for the prior quarter
+  was less than $2,500, and you didn't incur a $100,000 next-day deposit obligation during
+  the current quarter. If so, go to Part 3.
+
+☒ You were a monthly schedule depositor for the entire quarter. Enter your tax liability
+  for each month and total liability for the quarter, then go to Part 3.
+
+Tax liability: Month 1    $8,890.44
+              Month 2    $8,795.22
+              Month 3    $8,785.66
+              Total liability for quarter $26,471.32
+
+☐ You were a semiweekly schedule depositor for any part of this quarter. Complete
+  Schedule B (Form 941), Report of Tax Liability for Semiweekly Schedule Depositors,
+  and attach it to Form 941.
+
+═══════════════════════════════════════════════════════════════
+
+PART 3: Tell us about your business.
+
+15. If your business has closed or you stopped paying wages    ☐ Check here, and
+    enter the final date you paid wages                       enter date ___/___/___
+
+16. If you are a seasonal employer and you don't have to file ☐ Check here.
+    a return for every quarter of the year
+
+═══════════════════════════════════════════════════════════════
+
+PART 4: May we speak with your third-party designee?
+
+Do you want to allow an employee, a paid tax preparer, or another person to discuss
+this return with the IRS? See the instructions for details.
+
+☒ Yes. Designee's name and phone number: Jennifer Walsh (555) 123-4567
+   Select a 5-digit Personal Identification Number (PIN) to use when talking to the IRS: 24680
+
+☐ No.
+
+═══════════════════════════════════════════════════════════════
+
+PART 5: Sign here. You MUST complete both pages of Form 941 and SIGN it.
+
+Under penalties of perjury, I declare that I have examined this return and accompanying
+documents, and to the best of my knowledge and belief, they are true, correct, and complete.
+Declaration of preparer (other than taxpayer) is based on all information of which preparer
+has any knowledge.
+
+X _________________________________ Date: 10/15/2025
+  Michael J. Thompson
+  Owner/President
+  Phone: (555) 123-FENCE
+
+═══════════════════════════════════════════════════════════════
+
+Paid Preparer Use Only                    Check if you are self-employed ☐
+
+Preparer's name: Sarah Chen, CPA
+Preparer's signature: _________________ Date: ___/___/___
+Firm's name: Chen & Associates CPA
+Firm's address: 456 Business Park Drive, Builderville, ST 12345
+Firm's EIN: 12-3456789
+Phone: (555) 987-1234
+
+═══════════════════════════════════════════════════════════════
+
+For Privacy Act and Paperwork Reduction Act Notice, see the back of the Payment Voucher.
+
+Cat. No. 17001Z                                                Form 941 (Rev. 1-2025)
