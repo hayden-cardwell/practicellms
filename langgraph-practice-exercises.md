@@ -124,7 +124,7 @@ Memory is essential for coherent multi‑turn behavior. Keep state minimal but u
 
 **Task**
 - Give your agent a **retriever tool** backed by local docs.
-- Chunk 2–3 markdown files and build a simple vector store.
+- Chunk 2–3 markdown or text files and build a simple vector store.
 - Expose a `retrieve(query)` tool and decide when to call it vs search vs calculator.
 
 **Extras**

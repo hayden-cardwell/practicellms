@@ -1785,6 +1785,7 @@ dependencies = [
     { name = "duckduckgo-search" },
     { name = "langchain", extra = ["openai"] },
     { name = "langchain-community" },
+    { name = "langchain-text-splitters" },
     { name = "langgraph" },
     { name = "llama-cpp-python" },
 ]
@@ -1796,6 +1797,7 @@ requires-dist = [
     { name = "duckduckgo-search", specifier = ">=8.1.1" },
     { name = "langchain", extras = ["openai"], specifier = ">=0.3.27" },
     { name = "langchain-community", specifier = ">=0.3.31" },
+    { name = "langchain-text-splitters", specifier = ">=0.3.11" },
     { name = "langgraph", specifier = ">=0.6.10" },
     { name = "llama-cpp-python", specifier = ">=0.3.16" },
 ]
