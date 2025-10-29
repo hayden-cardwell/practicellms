@@ -88,12 +88,14 @@ class GraphState(BaseModel):
 
 
 # TOOLS
-def validate_tool(state: GraphState) -> dict:
+def validate_tool(state: GraphState):
     """
     Tool to determine if all information has been gathered. Deterministic and not using the LLM.
     """
 
-    pass
+    if state.quote_information is None:
+        return {}
+    return state.quote_information.model_dump()
 
 
 # NODES
@@ -144,6 +146,9 @@ def quote_generator(state: GraphState, LLM) -> dict:
 
 
 def gather_information(state: GraphState, LLM) -> dict:
+
+    print(validate_tool(state))
+
     system_message = SystemMessage(
         content=f"""You are a helpful assistant in place to gather the information from the user.
         You will be given a list of information to gather from the user. 
@@ -187,7 +192,7 @@ def run_loop(lg_graph) -> None:
         "messages": AIMessage(
             content="""Hello, I'm an AI assistant working for Superior Fence Solutions. 
             I understand you would like a quote on a fence or gate project. 
-            I will ask you a few questions to gather the information needed to generate a quote, if that's okay with you."
+            I will ask you a series of questions to gather the information needed to generate a quote.
             """
         )
     }
