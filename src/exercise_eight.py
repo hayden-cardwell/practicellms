@@ -21,10 +21,16 @@ class CustomerInformation(BaseModel):
     Pydantic Model defining the customer information.
     """
 
-    full_name: str
-    property_address: str
-    phone_number: str
-    email_address: str
+    full_name: str = Field(description="The full name of the customer.")
+    property_address: str = Field(
+        description="The property address the customer is requesting a quote for."
+    )
+    phone_number: str = Field(
+        description="The phone number the customer can be reached at."
+    )
+    email_address: str = Field(
+        description="The email address the customer can be reached at and which the quote will be sent to."
+    )
 
 
 class ProjectDetails(BaseModel):
@@ -32,16 +38,32 @@ class ProjectDetails(BaseModel):
     Pydantic Model defining the project details.
     """
 
-    property_type: Literal["residential", "commercial"]
+    property_type: Literal["residential", "commercial"] = Field(
+        description="The type of property the customer is requesting a quote for."
+    )
     fence_type: Literal[
         "privacy", "decorative", "security", "pool", "chain link", "commercial"
+    ] = Field(description="The type of fence the customer is requesting a quote for.")
+    total_linear_footage: Annotated[
+        float,
+        Field(
+            ge=0,
+            description="The total linear footage of the fence the customer is requesting a quote for.",
+        ),
     ]
-    total_linear_footage: Annotated[float, Field(ge=0)]
-    fence_height_in_feet: Literal[4, 5, 6, 8]
+    fence_height_in_feet: Literal[4, 5, 6, 8] = Field(
+        description="The height of the fence the customer is requesting a quote for."
+    )
     preferred_material: Literal[
         "Cedar", "Pine", "Composite", "Aluminum", "Steel", "Vinyl"
-    ]
-    location_on_property: Literal["backyard", "front yard", "perimeter", "other"]
+    ] = Field(
+        description="The preferred material for the fence the customer is requesting a quote for."
+    )
+    location_on_property: Literal["backyard", "front yard", "perimeter", "other"] = (
+        Field(
+            description="The location on the property the customer is requesting a quote for."
+        )
+    )
 
 
 class GateRequirements(BaseModel):
@@ -49,10 +71,28 @@ class GateRequirements(BaseModel):
     Pydantic Model defining the gate requirements.
     """
 
-    number_of_gates: Annotated[int, Field(ge=0)]
-    gate_type: Literal["single", "double", "none"]
-    gate_width_in_feet: Optional[Annotated[float, Field(ge=0)]] = None
-    automation_requirements: bool = False
+    number_of_gates: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="The number of gates the customer is requesting a quote for.",
+        ),
+    ]
+    gate_type: Literal["single", "double", "none"] = Field(
+        description="The type of gate(s) the customer is requesting a quote for."
+    )
+    gate_width_in_feet: Optional[
+        Annotated[
+            float,
+            Field(
+                ge=0,
+                description="The width of the gate(s) the customer is requesting a quote for.",
+            ),
+        ]
+    ] = None
+    automation_requirements: bool = Field(
+        description="Whether the customer is requesting a quote for automated gates."
+    )
 
 
 class AdditionalDetails(BaseModel):
@@ -60,10 +100,18 @@ class AdditionalDetails(BaseModel):
     Pydantic Model defining the additional details.
     """
 
-    special_requirements: Optional[str] = None
-    preferred_timeline: Optional[str] = None
-    obstacles: Optional[str] = None
-    special_site_conditions: Optional[str] = None
+    special_requirements: Optional[str] = Field(
+        description="Any special requirements or custom features the customer is requesting a quote for. Note that custom features are subject to further review for feasibility."
+    )
+    preferred_timeline: Optional[str] = Field(
+        description="The preferred timeline, including any deadlines or desired completion dates, for the project the customer is requesting a quote for."
+    )
+    obstacles: Optional[str] = Field(
+        description="Any physical obstacles (e.g., trees, rocks, slopes, existing structures) that may affect the fence installation."
+    )
+    special_site_conditions: Optional[str] = Field(
+        description="Any unique site conditions (e.g., soil type, drainage issues, underground utilities, access limitations) that may impact the project."
+    )
 
 
 class QuoteInformation(BaseModel):
@@ -71,10 +119,10 @@ class QuoteInformation(BaseModel):
     Pydantic Model defining the information needed to generate a quote.
     """
 
-    customer_information: CustomerInformation
-    project_details: ProjectDetails
-    gate_requirements: GateRequirements
-    additional_details: AdditionalDetails
+    customer_information: Optional[CustomerInformation] = None
+    project_details: Optional[ProjectDetails] = None
+    gate_requirements: Optional[GateRequirements] = None
+    additional_details: Optional[AdditionalDetails] = None
 
 
 class GraphState(BaseModel):
@@ -85,6 +133,81 @@ class GraphState(BaseModel):
     # Messages are added to the state by the add_messages function.
     messages: Annotated[Sequence[BaseMessage], add_messages]
     quote_information: Optional[QuoteInformation] = None
+    collected_fields: dict = {}
+
+
+class InformationCollector:
+    def __init__(self, root_model: type[BaseModel]):
+        self.root_model = root_model
+        self.schema = self.extract_schema()
+
+    def extract_schema(self) -> dict:
+        """
+        Extract the schema from the root model.
+        """
+        return self.root_model.model_json_schema()
+
+    def get_next_field(self, collected_fields: dict):
+        """
+        returns the next field to collect based on the collected fields.
+
+        The schemas look like this:
+        'CustomerInformation': {'description': 'Pydantic Model defining the '
+                                                  'customer information.',
+                                   'properties': {'email_address': {'title': 'Email '
+                                                                             'Address',
+                                                                    'type': 'string'},
+                                                  'full_name': {'title': 'Full '
+                                                                         'Name',
+                                                                'type': 'string'},
+                                                  'phone_number': {'title': 'Phone '
+                                                                            'Number',
+                                                                   'type': 'string'},
+                                                  'property_address': {'title': 'Property '
+                                                                                'Address',
+                                                                       'type': 'string'}},
+                                   'required': ['full_name',
+                                                'property_address',
+                                                'phone_number',
+                                                'email_address'],
+                                   'title': 'CustomerInformation',
+                                   'type': 'object'}
+
+        collected_fields should look like:
+        {
+            "field_name": field_name,
+            "field_description": field_description,
+            "field_type": field_type,
+            "required": required,
+        }
+        """
+        for sub_model in self.schema["$defs"].values():
+            # We're going through each sub-model to find the next field to collect.
+            fields_in_sub_model = [p for p in sub_model["properties"].keys()]
+            for field_key in fields_in_sub_model:
+                if field_key not in collected_fields:
+                    print(f"Collecting field: {field_key}")
+                    pprint(sub_model)
+
+                    # Special handling for any_of fields
+                    if "any_of" in sub_model["properties"][field_key]:
+                        pass  # TODO: Handle any_of fields
+
+                    return_dict = {
+                        "field_key": field_key,
+                        "field_pretty_name": sub_model["properties"][field_key][
+                            "title"
+                        ],
+                        "field_description": sub_model["properties"][field_key][
+                            "description"
+                        ],
+                        "field_type": sub_model["properties"][field_key]["type"],
+                        "required": field_key in sub_model["required"],
+                    }
+                    pprint(return_dict)
+                    print("-" * 80)
+                    return return_dict
+            return None
 
 
 # TOOLS
@@ -146,16 +269,31 @@ def quote_generator(state: GraphState, LLM) -> dict:
 
 
 def gather_information(state: GraphState, LLM) -> dict:
+    """Node for gathering information from the user.
+    Will be looped back to, one field at a time, until all information is gathered.
+    Because of this, we need to create it to be stateless, so it's field agnostic."""
 
-    print(validate_tool(state))
+    ic = InformationCollector(QuoteInformation)
+
+    next_field = ic.get_next_field(state.collected_fields)
+    if next_field is None:
+        return {}
+
+    # next_field should look like:
+    """
+    {"field_name": field_name,
+    field_description: field_description,
+    field_type: field_type,
+    required: required, }
+    """
 
     system_message = SystemMessage(
         content=f"""You are a helpful assistant in place to gather the information from the user.
         You will be given a list of information to gather from the user. 
-        You've already asked the user if it's okay, so proceed to ask ONE question at a time to make the conversation natural and not overwhelming. 
         Be friendly and professional. 
         If the customer is unsure about measurements or specifications, offer to schedule a free on-site consultation.
-        Start with the customer information of name, address, phone number, and email address."""
+        Ask ONE question at a time to make the conversation natural and not overwhelming.
+        The piece of information you're currently attempting to collect is: {next_field}"""
     )
 
     # Gen question
