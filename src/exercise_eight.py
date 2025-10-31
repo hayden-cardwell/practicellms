@@ -3,7 +3,6 @@ from functools import partial
 from operator import add
 import os
 from pprint import pprint
-from turtle import st
 from typing import Annotated, Literal, Optional, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -38,12 +37,22 @@ class ProjectDetails(BaseModel):
     Pydantic Model defining the project details.
     """
 
-    property_type: Literal["residential", "commercial"] = Field(
+    property_type: Literal[
+        "residential",
+        "commercial",
+    ] = Field(
         description="The type of property the customer is requesting a quote for."
     )
+
     fence_type: Literal[
-        "privacy", "decorative", "security", "pool", "chain link", "commercial"
+        "privacy",
+        "decorative",
+        "security",
+        "pool",
+        "chain link",
+        "commercial",
     ] = Field(description="The type of fence the customer is requesting a quote for.")
+
     total_linear_footage: Annotated[
         float,
         Field(
@@ -51,18 +60,33 @@ class ProjectDetails(BaseModel):
             description="The total linear footage of the fence the customer is requesting a quote for.",
         ),
     ]
-    fence_height_in_feet: Literal[4, 5, 6, 8] = Field(
+    fence_height_in_feet: Literal[
+        4,
+        5,
+        6,
+        8,
+    ] = Field(
         description="The height of the fence the customer is requesting a quote for."
     )
+
     preferred_material: Literal[
-        "Cedar", "Pine", "Composite", "Aluminum", "Steel", "Vinyl"
+        "Cedar",
+        "Pine",
+        "Composite",
+        "Aluminum",
+        "Steel",
+        "Vinyl",
     ] = Field(
         description="The preferred material for the fence the customer is requesting a quote for."
     )
-    location_on_property: Literal["backyard", "front yard", "perimeter", "other"] = (
-        Field(
-            description="The location on the property the customer is requesting a quote for."
-        )
+
+    location_on_property: Literal[
+        "backyard",
+        "front yard",
+        "perimeter",
+        "other",
+    ] = Field(
+        description="The location on the property the customer is requesting a quote for."
     )
 
 
@@ -78,9 +102,13 @@ class GateRequirements(BaseModel):
             description="The number of gates the customer is requesting a quote for.",
         ),
     ]
-    gate_type: Literal["single", "double", "none"] = Field(
-        description="The type of gate(s) the customer is requesting a quote for."
-    )
+
+    gate_type: Literal[
+        "single",
+        "double",
+        "none",
+    ] = Field(description="The type of gate(s) the customer is requesting a quote for.")
+
     gate_width_in_feet: Optional[
         Annotated[
             float,
@@ -90,6 +118,7 @@ class GateRequirements(BaseModel):
             ),
         ]
     ] = None
+
     automation_requirements: bool = Field(
         description="Whether the customer is requesting a quote for automated gates."
     )
@@ -140,6 +169,12 @@ class InformationCollector:
     def __init__(self, root_model: type[BaseModel]):
         self.root_model = root_model
         self.schema = self.extract_schema()
+        self.priority_order = [
+            "CustomerInformation",
+            "ProjectDetails",
+            "GateRequirements",
+            "AdditionalDetails",
+        ]
 
     def extract_schema(self) -> dict:
         """
@@ -150,48 +185,23 @@ class InformationCollector:
     def get_next_field(self, collected_fields: dict):
         """
         returns the next field to collect based on the collected fields.
-
-        The schemas look like this:
-        'CustomerInformation': {'description': 'Pydantic Model defining the '
-                                                  'customer information.',
-                                   'properties': {'email_address': {'title': 'Email '
-                                                                             'Address',
-                                                                    'type': 'string'},
-                                                  'full_name': {'title': 'Full '
-                                                                         'Name',
-                                                                'type': 'string'},
-                                                  'phone_number': {'title': 'Phone '
-                                                                            'Number',
-                                                                   'type': 'string'},
-                                                  'property_address': {'title': 'Property '
-                                                                                'Address',
-                                                                       'type': 'string'}},
-                                   'required': ['full_name',
-                                                'property_address',
-                                                'phone_number',
-                                                'email_address'],
-                                   'title': 'CustomerInformation',
-                                   'type': 'object'}
-
-        collected_fields should look like:
-        {
-            "field_name": field_name,
-            "field_description": field_description,
-            "field_type": field_type,
-            "required": required,
-        }
         """
-        for sub_model in self.schema["$defs"].values():
-            # We're going through each sub-model to find the next field to collect.
+
+        for sub_model_name in self.priority_order:
+            if sub_model_name in self.schema["$defs"]:
+                sub_model = self.schema["$defs"][sub_model_name]
+            else:
+                continue
+
             fields_in_sub_model = [p for p in sub_model["properties"].keys()]
             for field_key in fields_in_sub_model:
                 if field_key not in collected_fields:
-                    print(f"Collecting field: {field_key}")
-                    pprint(sub_model)
 
                     # Special handling for any_of fields
-                    if "any_of" in sub_model["properties"][field_key]:
-                        pass  # TODO: Handle any_of fields
+                    if "anyOf" in sub_model["properties"][field_key]:
+                        valid_types = sub_model["properties"][field_key]["anyOf"]
+                    else:
+                        valid_types = [sub_model["properties"][field_key]["type"]]
 
                     return_dict = {
                         "field_key": field_key,
@@ -201,7 +211,7 @@ class InformationCollector:
                         "field_description": sub_model["properties"][field_key][
                             "description"
                         ],
-                        "field_type": sub_model["properties"][field_key]["type"],
+                        "field_type": valid_types,
                         "required": field_key in sub_model["required"],
                     }
                     pprint(return_dict)
@@ -268,12 +278,11 @@ def quote_generator(state: GraphState, LLM) -> dict:
     llm_structured_output = LLM.with_structured_output(QuoteInformation)
 
 
-def gather_information(state: GraphState, LLM) -> dict:
+def gather_information(state: GraphState, LLM, ic: InformationCollector) -> dict:
+    # TODO: Fix issue where the same field is asked for multiple times bc collected_fields is never appended to
     """Node for gathering information from the user.
     Will be looped back to, one field at a time, until all information is gathered.
     Because of this, we need to create it to be stateless, so it's field agnostic."""
-
-    ic = InformationCollector(QuoteInformation)
 
     next_field = ic.get_next_field(state.collected_fields)
     if next_field is None:
@@ -312,13 +321,34 @@ def gather_information(state: GraphState, LLM) -> dict:
     }
 
 
-def validate_information(state: GraphState, LLM) -> dict:
-    pass
+def stash_information(state: GraphState, LLM, ic: InformationCollector) -> dict:
+    """Node for stashing information in the state."""
+
+    next_field = ic.get_next_field(state.collected_fields)
+    if next_field is None:
+        return {}
+
+    system_message = SystemMessage(
+        content=f"""You are a helpful assistant in place to validate information gathered from the user.
+        The piece of information you're currently attempting to collect is: {next_field}"""
+    )
+
+    # The structured output is the next field's type
+    # TODO: Implement validation type checking somehow, IDK how.
+    llm_structured_output = LLM.with_structured_output(next_field["field_type"])
+    stashed_information = llm_structured_output.invoke(
+        [system_message, *state.messages]
+    )
+
+    return {
+        "collected_fields": {**state.collected_fields},
+    }
 
 
-def validate_information_edge(state: GraphState) -> Literal["complete", "incomplete"]:
+def stash_information_edge(state: GraphState) -> Literal["complete", "incomplete"]:
     """Returns 'complete' if all information is gathered, 'incomplete' otherwise."""
-    return "complete" if state.quote_information is not None else "incomplete"
+    return "complete" if state.collected_fields is not None else "incomplete"
+    pass
 
 
 def run_loop(lg_graph) -> None:
@@ -364,23 +394,24 @@ def run_loop(lg_graph) -> None:
 def main():
     LLM = get_lc_llm()
     checkpoint_saver = InMemorySaver()
-
+    ic = InformationCollector(QuoteInformation)
     # GraphState is a pydantic model that defines the state of the graph
     g = StateGraph(GraphState)
 
     # Add nodes to the graph
-    g.add_node("gather_information", partial(gather_information, LLM=LLM))
-    g.add_node("validate_information", partial(validate_information, LLM=LLM))
+    g.add_node("gather_information", partial(gather_information, LLM=LLM, ic=ic))
+    g.add_node("stash_information", partial(stash_information, LLM=LLM, ic=ic))
     g.add_node("quote_generator", partial(quote_generator, LLM=LLM))
 
     # Add edges to the graphs
     g.add_edge(START, "gather_information")
-    g.add_edge("gather_information", "validate_information")
+    g.add_edge("gather_information", "stash_information")
     g.add_conditional_edges(
-        "validate_information",
-        validate_information_edge,
+        "stash_information",
+        stash_information_edge,
         {"complete": "quote_generator", "incomplete": "gather_information"},
     )
+    g.add_edge("stash_information", "quote_generator")
     g.add_edge("quote_generator", END)
 
     lg_graph = g.compile(checkpointer=checkpoint_saver)
