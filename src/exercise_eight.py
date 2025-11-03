@@ -213,11 +213,29 @@ class InformationCollector:
                         ],
                         "field_type": valid_types,
                         "required": field_key in sub_model["required"],
+                        "sub_model": sub_model_name,
                     }
+                    print(f"NEXT FIELD:")
                     pprint(return_dict)
                     print("-" * 80)
                     return return_dict
             return None
+
+    def is_sub_model_complete(self, collected_fields: dict, sub_model_name: str):
+        """
+        Returns True if all fields in the sub model are collected, False otherwise.
+        """
+
+        if sub_model_name in self.schema["$defs"]:
+            sub_model = self.schema["$defs"][sub_model_name]
+        else:
+            raise ValueError(f"Sub model {sub_model_name} not found in schema.")
+
+        required_fields = [p for p in sub_model["required"]]
+        for field_key in required_fields:
+            if field_key not in collected_fields:
+                return False
+        return True
 
 
 # TOOLS
@@ -329,25 +347,42 @@ def stash_information(state: GraphState, LLM, ic: InformationCollector) -> dict:
         return {}
 
     system_message = SystemMessage(
-        content=f"""You are a helpful assistant in place to validate information gathered from the user.
-        The piece of information you're currently attempting to collect is: {next_field}"""
+        content=f"""You are a helpful assistant in place to validate and extract information gathered from the user.
+        The piece of information you're currently attempting to collect is: {next_field}
+        The user's response is: {state.messages[-1].content}
+        Respond with only the valid information for the field."""
     )
 
     # The structured output is the next field's type
     # TODO: Implement validation type checking somehow, IDK how.
-    llm_structured_output = LLM.with_structured_output(next_field["field_type"])
-    stashed_information = llm_structured_output.invoke(
-        [system_message, *state.messages]
-    )
+
+    llm_output = LLM.invoke([system_message, *state.messages])
+
+    next_field["field_value"] = llm_output.content  # Add the value to the next field
 
     return {
-        "collected_fields": {**state.collected_fields},
+        "collected_fields": {
+            **state.collected_fields,
+            next_field["field_key"]: next_field,
+        },
     }
 
 
-def stash_information_edge(state: GraphState) -> Literal["complete", "incomplete"]:
-    """Returns 'complete' if all information is gathered, 'incomplete' otherwise."""
-    return "complete" if state.collected_fields is not None else "incomplete"
+def stash_information_edge(
+    state: GraphState, ic: InformationCollector
+) -> Literal["complete", "validate_sub_model", "gather_information"]:
+    """Returns 'complete' if all information is gathered, 'validate_sub_model' if all fields for the sub model are collected, 'gather_information' otherwise."""
+    next_field = ic.get_next_field(state.collected_fields)
+    if next_field is None:
+        return "complete"  # All information is gathered
+    if ic.is_sub_model_complete(state.collected_fields, next_field["sub_model"]):
+        return "validate_sub_model"  # All fields for the sub model are collected
+    else:
+        return "gather_information"  # Not all fields for the sub model are collected
+
+
+def validate_sub_model(state: GraphState, ic: InformationCollector) -> dict:
+    """Node for validating the sub model if all fields for that sub_model are collected."""
     pass
 
 
@@ -401,6 +436,7 @@ def main():
     # Add nodes to the graph
     g.add_node("gather_information", partial(gather_information, LLM=LLM, ic=ic))
     g.add_node("stash_information", partial(stash_information, LLM=LLM, ic=ic))
+    g.add_node("validate_sub_model", partial(validate_sub_model, ic=ic))
     g.add_node("quote_generator", partial(quote_generator, LLM=LLM))
 
     # Add edges to the graphs
@@ -408,10 +444,14 @@ def main():
     g.add_edge("gather_information", "stash_information")
     g.add_conditional_edges(
         "stash_information",
-        stash_information_edge,
-        {"complete": "quote_generator", "incomplete": "gather_information"},
+        partial(stash_information_edge, ic=ic),
+        {
+            "complete": "quote_generator",
+            "validate_sub_model": "validate_sub_model",
+            "gather_information": "gather_information",
+        },
     )
-    g.add_edge("stash_information", "quote_generator")
+    g.add_edge("validate_sub_model", "gather_information")
     g.add_edge("quote_generator", END)
 
     lg_graph = g.compile(checkpointer=checkpoint_saver)
