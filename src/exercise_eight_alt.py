@@ -1,7 +1,4 @@
-from datetime import datetime
 from functools import partial
-from operator import add
-import os
 from pprint import pprint
 from typing import Annotated, Literal, Optional, Sequence
 
@@ -10,7 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from shared.lc_llm import get_lc_llm
 
@@ -149,29 +146,28 @@ def show_email(state: GraphState) -> dict:
     print("The following email will be sent:")
     pprint(state.email)
 
-    while True:
-        print("Would you like to send this email? (y/n)")
-        user_input = input("Your response: ")
+    interrupt_msg = "Would you like to send this email? (y/n)"
+    user_input = interrupt(interrupt_msg)
 
-        if user_input.lower() == "y":
-            return {"ready_to_send": True}
-        elif user_input.lower() == "n":
-            interrupt_msg = "What would you like to change about the email?"
-            email_feedback = interrupt(interrupt_msg)
-            return {
-                "email_feedback": email_feedback,
-                "ready_to_send": False,
-                "messages": [
-                    *state.messages,
-                    AIMessage(content=interrupt_msg),
-                    HumanMessage(content=email_feedback),
-                    AIMessage(
-                        content=f"Thank you for your feedback. I will update the email based on your feedback."
-                    ),
-                ],
-            }
-        else:
-            print("Please enter 'y' or 'n'.")
+    if user_input.lower() == "y":
+        return {"ready_to_send": True}
+    elif user_input.lower() == "n":
+        interrupt_msg = "What would you like to change about the email?"
+        email_feedback = interrupt(interrupt_msg)
+        return {
+            "email_feedback": email_feedback,
+            "ready_to_send": False,
+            "messages": [
+                *state.messages,
+                AIMessage(content=interrupt_msg),
+                HumanMessage(content=email_feedback),
+                AIMessage(
+                    content=f"Thank you for your feedback. I will update the email based on your feedback."
+                ),
+            ],
+        }
+    else:
+        print("Please enter 'y' or 'n'.")
 
 
 def show_email_edge(state: GraphState) -> Literal["send", "update"]:
