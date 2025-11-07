@@ -1,7 +1,10 @@
+from datetime import datetime
 from functools import partial
+from operator import add
 from pprint import pprint
 from typing import Annotated, Literal, Optional, Sequence
 
+from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -10,6 +13,14 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel
 
 from shared.lc_llm import get_lc_llm
+
+
+class SearchToolRequest(BaseModel):
+    """
+    Pydantic Model for the search tool.
+    """
+
+    queries: list[str]
 
 
 class GraphState(BaseModel):
@@ -23,24 +34,98 @@ class GraphState(BaseModel):
     # Planner is a list of steps to be taken
     plan: Optional[list[str]] = None
 
+    # The queries to the search tool.
+    search_queries: Annotated[list[str], add] = []
+
+    # The results from the search tool.
+    search_results: Annotated[list, add] = []
+
+    # Report is the working report being written
+    report: Optional[str] = None
+
 
 # TOOLS
+def search_tool(state: GraphState, LLM) -> dict:
+    system_message = SystemMessage(
+        content=f"""You are a web-search expert. 
+        For each user message, output 1–3 concise search queries (one per line) and nothing else.
+        Use conversation context and any prior query feedback. 
+        Prefer recent results — include years/ranges when appropriate (Current date: {datetime.now().strftime('%Y-%m-%d')}).
+        Make queries 3–12 words, use operators (quotes, site:, filetype:, OR, -, *) for precision. 
+        If ambiguous, cover up to three likely interpretations. 
+        Do not repeat the user's prompt.
+        Keep in mind that you may have already called the search tool, and here's the previous search queries (if they exist): {state.search_queries if state.search_queries else "None"}
+        Answer with a list of search queries.
+        """
+    )
+
+    llm_structured_output = LLM.with_structured_output(SearchToolRequest)
+    search_queries = llm_structured_output.invoke([system_message, *state.messages])
+
+    search = DuckDuckGoSearchResults(max_results=5)
+    search_results = [search.invoke(q) for q in search_queries.queries]
+
+    return {
+        "search_queries": search_queries.queries,
+        "search_results": search_results,
+    }
 
 
 # NODES
+def gather_topic(state: GraphState) -> dict:
+    """Node for gathering the report topic from the user."""
+
+    user_topic = interrupt("What would you like me to write a report about?")
+
+    return {"messages": [HumanMessage(content=user_topic)]}
+
+
 def plan_report(state: GraphState, LLM) -> dict:
     """Node for planning the report."""
 
     system_message = SystemMessage(
-        content="""You are a helpful assistant planning a report.
-        You need to create a list of steps to take to write the report.
-        Be specific and detailed.
+        content="""You are a helpful assistant that creates detailed plans for writing reports.
+        
+        Based on the user's request, create a comprehensive list of steps needed to write the report.
+        Each step should be specific and actionable.
+        
+        Create between 5 and 15 steps for the plan.
+        
+        Your plan should include steps such as:
+        - Research specific topics or gather information
+        - Draft specific sections (introduction, body, conclusion, etc.)
+        - Review and revise content
+        - Finalize formatting and structure
+        
+        Output your plan with each step on a new line, without any bullet points or numbering.
+        For example:
+        Research the history of [topic]
+        Draft the introduction section
+        Draft the methodology section
+        Review and revise for clarity
+        Finalize formatting and citations
+        
+        Be specific about what needs to be researched, drafted, or revised in each step.
         """
     )
 
     llm_query_to_user = LLM.invoke([system_message, *state.messages])
 
-    return {"plan": llm_query_to_user.content}
+    # Simply split by newlines and filter out empty lines
+    plan_steps = [
+        line.strip() for line in llm_query_to_user.content.split("\n") if line.strip()
+    ]
+
+    return {"plan": plan_steps}
+
+
+def execute_plan_step(state: GraphState, LLM) -> dict:
+    """Node for executing a plan step."""
+
+    system_message = SystemMessage(
+        content="""You are a helpful assistant that executes a plan step.
+        """
+    )
 
 
 def run_loop(lg_graph) -> None:
@@ -87,10 +172,12 @@ def main():
     g = StateGraph(GraphState)
 
     # Add nodes to the graph
+    g.add_node("gather_topic", gather_topic)
     g.add_node("plan_report", partial(plan_report, LLM=LLM))
 
     # Add edges to the graphs
-    g.add_edge(START, "plan_report")
+    g.add_edge(START, "gather_topic")
+    g.add_edge("gather_topic", "plan_report")
     g.add_edge("plan_report", END)
 
     lg_graph = g.compile(checkpointer=checkpoint_saver)
