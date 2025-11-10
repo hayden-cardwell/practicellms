@@ -23,6 +23,23 @@ class SearchToolRequest(BaseModel):
     queries: list[str]
 
 
+class StepCategory(BaseModel):
+    """
+    Pydantic Model for classifying the current step category.
+    """
+
+    category: Literal["research", "draft", "review", "formatting", "other"]
+
+
+class StepSummary(BaseModel):
+    """
+    A compact rolling summary for a completed step.
+    """
+
+    step: str
+    summary: str
+
+
 class GraphState(BaseModel):
     """
     Pydantic Model defining the state for the graph.
@@ -34,41 +51,19 @@ class GraphState(BaseModel):
     # Planner is a list of steps to be taken
     plan: Optional[list[str]] = None
 
-    # The queries to the search tool.
-    search_queries: Annotated[list[str], add] = []
+    # Current step being executed
+    current_step: Optional[str] = None
 
-    # The results from the search tool.
-    search_results: Annotated[list, add] = []
+    # Current step category (classified once in prepare_step)
+    current_step_category: Optional[
+        Literal["research", "draft", "review", "formatting", "other"]
+    ] = None
+
+    # Rolling summaries from executing steps (most recent N only)
+    artifacts: Annotated[list[StepSummary], add] = []
 
     # Report is the working report being written
     report: Optional[str] = None
-
-
-# TOOLS
-def search_tool(state: GraphState, LLM) -> dict:
-    system_message = SystemMessage(
-        content=f"""You are a web-search expert. 
-        For each user message, output 1–3 concise search queries (one per line) and nothing else.
-        Use conversation context and any prior query feedback. 
-        Prefer recent results — include years/ranges when appropriate (Current date: {datetime.now().strftime('%Y-%m-%d')}).
-        Make queries 3–12 words, use operators (quotes, site:, filetype:, OR, -, *) for precision. 
-        If ambiguous, cover up to three likely interpretations. 
-        Do not repeat the user's prompt.
-        Keep in mind that you may have already called the search tool, and here's the previous search queries (if they exist): {state.search_queries if state.search_queries else "None"}
-        Answer with a list of search queries.
-        """
-    )
-
-    llm_structured_output = LLM.with_structured_output(SearchToolRequest)
-    search_queries = llm_structured_output.invoke([system_message, *state.messages])
-
-    search = DuckDuckGoSearchResults(max_results=5)
-    search_results = [search.invoke(q) for q in search_queries.queries]
-
-    return {
-        "search_queries": search_queries.queries,
-        "search_results": search_results,
-    }
 
 
 # NODES
@@ -84,29 +79,10 @@ def plan_report(state: GraphState, LLM) -> dict:
     """Node for planning the report."""
 
     system_message = SystemMessage(
-        content="""You are a helpful assistant that creates detailed plans for writing reports.
-        
-        Based on the user's request, create a comprehensive list of steps needed to write the report.
+        content="""Create a concise plan (5–8 steps) to write the report.
         Each step should be specific and actionable.
-        
-        Create between 5 and 15 steps for the plan.
-        
-        Your plan should include steps such as:
-        - Research specific topics or gather information
-        - Draft specific sections (introduction, body, conclusion, etc.)
-        - Review and revise content
-        - Finalize formatting and structure
-        
-        Output your plan with each step on a new line, without any bullet points or numbering.
-        For example:
-        Research the history of [topic]
-        Draft the introduction section
-        Draft the methodology section
-        Review and revise for clarity
-        Finalize formatting and citations
-        
-        Be specific about what needs to be researched, drafted, or revised in each step.
-        """
+        Include research, drafting, review, and finalization as appropriate.
+        Output one step per line, no bullets or numbers."""
     )
 
     llm_query_to_user = LLM.invoke([system_message, *state.messages])
@@ -115,22 +91,134 @@ def plan_report(state: GraphState, LLM) -> dict:
     plan_steps = [
         line.strip() for line in llm_query_to_user.content.split("\n") if line.strip()
     ]
-
+    print(f"📝 Plan created with {len(plan_steps)} step(s)")
     return {"plan": plan_steps}
 
 
+def prepare_step(state: GraphState, LLM) -> dict:
+    """Node for preparing the next step by popping it from the plan and classifying it."""
+
+    assert state.plan, "Plan is required to prepare a step."
+    assert len(state.plan) > 0, "Plan must have at least one step."
+
+    step = state.plan.pop(0)
+    print(f"Preparing step: {step}")
+
+    # Classify the step once to reduce downstream LLM calls
+    classify_msg = SystemMessage(
+        content=f"""Classify the plan step into one category:
+        research | draft | review | formatting | other
+
+        Step: {step}
+        Answer with only the category."""
+    )
+    step_category = LLM.with_structured_output(StepCategory).invoke(
+        [
+            classify_msg,
+            *state.messages,
+        ]
+    )
+    print(f"🔎 Step category: {step_category.category}")
+
+    return {
+        "plan": state.plan,
+        "current_step": step,
+        "current_step_category": step_category.category,
+    }
+
+
 def execute_plan_step(state: GraphState, LLM) -> dict:
-    """Node for executing a plan step."""
+    """Node for executing the current plan step using available context and search results."""
+
+    assert state.current_step, "Current step is required to execute a plan step."
+
+    print(f"🚀 Executing step: {state.current_step}")
+    print(f"   Category: {state.current_step_category}")
+
+    # Prepare brief context from previous summaries
+    context_summary = ""
+    if state.artifacts:
+        recent = state.artifacts[-3:]
+        context_summary = "\n\nRecent step summaries:\n" + "\n".join(
+            [f"- {s.step}: {s.summary[:200]}" for s in recent]
+        )
+
+    # Build the system message for executing this step
+    current_report = (
+        f"\n\nCurrent report draft:\n{state.report}\n" if state.report else ""
+    )
+
+    # If research step, generate 1-2 queries and fetch results
+    search_items = []
+    if state.current_step_category == "research":
+        query_msg = SystemMessage(
+            content=f"""Generate 1-2 concise web queries for this step (one per line). Step: {state.current_step}"""
+        )
+        queries = LLM.with_structured_output(SearchToolRequest).invoke(
+            [query_msg, *state.messages]
+        )
+        print(f"🌐 Queries: {queries.queries}")
+        search = DuckDuckGoSearchResults(max_results=5)
+        for q in queries.queries:
+            result = search.invoke(q)
+            if isinstance(result, list):
+                search_items.extend(result)
+            else:
+                search_items.append(result)
+        print(f"🔎 Collected {len(search_items)} search result items")
 
     system_message = SystemMessage(
-        content="""You are a helpful assistant that executes a plan step.
+        content=f"""Execute the plan step.
+
+        Step: {state.current_step}
+        Category: {state.current_step_category}
+        {context_summary}
+        {current_report}
+        Search results available: {len(search_items)} items
+
+        Output only the result for this step.
+        - If research: summarize findings in 2-3 sentences.
+        - If draft: write the section content.
+        - If review: provide concise improvement notes.
         """
     )
 
+    # Get LLM to process the step
+    step_output = LLM.invoke([system_message, *state.messages])
 
+    print(f"🧩 Step output preview: {step_output.content[:200]}...")
+
+    # Create a compact summary artifact
+    artifacts = [
+        StepSummary(step=state.current_step, summary=step_output.content[:300])
+    ]
+    print(f"✅ Step '{state.current_step}' completed.")
+
+    # Update the report only for drafting steps
+    updated_report = state.report or ""
+    if state.current_step_category == "draft":
+        updated_report += f"\n\n--- {state.current_step} ---\n{step_output.content}"
+        print("📝 Appended drafted content to report")
+
+    # Add the step output as a message to the conversation
+    return {
+        "artifacts": artifacts,
+        "current_step": None,  # Clear current step after execution
+        "current_step_category": None,
+        "report": updated_report if updated_report != state.report else state.report,
+        "messages": [
+            AIMessage(content=f"Completed: {state.current_step}\n{step_output.content}")
+        ],
+    }
+
+
+# (search decision is now implicit via current_step_category set in prepare_step)
+
+
+# MAIN LOOP
 def run_loop(lg_graph) -> None:
     # Define the thread ID for the conversation, could be random
-    thread = {"configurable": {"thread_id": "1"}}
+    thread = {"configurable": {"thread_id": "1"}, "recursion_limit": 100}
 
     # Context always starts with pre-defined AI message
     command = {
@@ -141,9 +229,13 @@ def run_loop(lg_graph) -> None:
 
     while True:
         # Events are updates to the state
-        for event in lg_graph.stream(command, thread, stream_mode="updates"):
-            pprint(event)
-            print("-" * 80)
+        for event in lg_graph.stream(
+            command,
+            thread,
+            stream_mode="updates",
+        ):
+            # pprint(event)
+            # print("-" * 80)
 
             # If the graph yields an end event, we're done
             if event.get("end"):
@@ -174,11 +266,16 @@ def main():
     # Add nodes to the graph
     g.add_node("gather_topic", gather_topic)
     g.add_node("plan_report", partial(plan_report, LLM=LLM))
+    g.add_node("prepare_step", partial(prepare_step, LLM=LLM))
+    g.add_node("execute_plan_step", partial(execute_plan_step, LLM=LLM))
 
     # Add edges to the graphs
     g.add_edge(START, "gather_topic")
     g.add_edge("gather_topic", "plan_report")
-    g.add_edge("plan_report", END)
+    g.add_edge("plan_report", "prepare_step")
+
+    # After preparing a step, execute it directly (search is handled inside execute when needed)
+    g.add_edge("prepare_step", "execute_plan_step")
 
     lg_graph = g.compile(checkpointer=checkpoint_saver)
 
